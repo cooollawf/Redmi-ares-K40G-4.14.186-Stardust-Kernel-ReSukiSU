@@ -126,7 +126,6 @@ all.config
 # fetched Android config fragments
 kernel/configs/android-*.cfg
 out/
-AnyKernel3/
 
 # SUSFS / kernel build extras
 *.zip
@@ -152,3 +151,4 @@ oldconfig.log
 adb
 kernel/Image.gz-dtb
 powershell
+AnyKernel3/Image.gz-dtb
