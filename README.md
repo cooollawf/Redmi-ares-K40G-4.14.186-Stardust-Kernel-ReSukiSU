@@ -69,7 +69,27 @@
 - 集成 **ReSukiSU**（KernelSU 的活跃分支），支持 `ADB Root`、`susfs` 等扩展功能
 - 集成 **SUSFS v2.3.0**，提供路径隐藏、cmdline 伪造、uname 伪装等 Root 隐藏能力
 - 修复 4.14 non-GKI 上的 **AIDL / SurfaceFlinger 注册问题**
+- 修复 init 收不到 `KERNEL_SU_RC` 导致 `ksud` 从不启动、所有模块（Zygisk Next / LSPosed）失效的问题
+- 加固 MTK GPU DVFS：`settle time` 归一化 + 自旋上限，修复偶发整机冻结
+- 收窄 `misc_open()` 的全局锁范围，避免单个驱动 `open()` 卡死拖垮全系统
 - 重写 `build.sh` 和 `build-inc.sh`，移除对原脚本作者硬编码路径的依赖
+
+---
+
+## 修复记录
+
+| 问题 | 位置 | 根因与修复 |
+|---|---|---|
+| Zygisk Next / LSPosed 完全不生效 | `fs/read_write.c` | `SYSCALL_DEFINE3(read)` 里 `ksu_handle_sys_read()` 的调用被注释，init 读不到注入的 `KERNEL_SU_RC`，`ksud` 从未被执行 → 所有模块不加载。恢复该调用即可 |
+| SELinux Enforcing 下卡 Logo 数十分钟 | 用户态（LSPosed 1.11） | `lspd` 的 `service package is not started` 自旋与 system_server 的 `ILSPApplicationService` 互等约 330 秒（`BpBinder transact 326780 ms`）。改用 LSPosed 1.9.x 后消失，与内核无关 |
+| 偶发整机冻结、无 panic、无 AEE | `mtk_gpufreq_plat.c` | `__calculate_{vgpu,vsram}_settletime()` 的 `deltaV` 为负时，`deltaV/1250+9` 赋给 `unsigned` 回绕成 ~4.29e9，`udelay()` 忙等约 4295 秒，且全程持有 `misc_open` 的全局锁。现对负值返回 0，并夹到 2000us；两处 vgpu 自旋另加 64 次上限 |
+| 单个 misc 驱动 `open()` 卡死拖垮全系统 | `drivers/char/misc.c` | `misc_open()` 原先在持有全局 `misc_mtx` 时调用驱动 `->open()`。现改为取到 `fops` 后释放锁再调用 |
+
+### 运行时取证（可选）
+
+`/data/adb/modules/ares_lastlog` 会用 `logcat -b all` 把日志持久化到 `/data/vendor/lastlog/`（8MB × 8 轮转）。
+若再次出现冻结，强制重启后直接 `adb pull /data/vendor/lastlog` 即可拿到死前现场；
+内核静默时用 `echo 1 > /proc/sys/kernel/sysrq` + `echo w`/`echo l` 抓 D 状态栈与 NMI 栈。
 
 ---
 
@@ -131,7 +151,9 @@ out/arch/arm64/boot/Image.gz-dtb
 
 ## 已知问题
 
-- 本项目早期尝试过 SELinux Enforcing，但 4.14 non-GKI 上动态策略注入不稳定，最终采用 **Permissive + SUSFS 隐藏**方案
+- SELinux **Enforcing** 现已可用（策略注入问题已修复）。早期“卡 Logo 数十分钟”已定位为 **LSPosed 1.11 的 `lspd` 启动自旋**，改用 LSPosed 1.9.x 后不再出现
+- 若继续使用 LSPosed 1.11，仍可能出现 system_server 被 `ILSPApplicationService` 阻塞数十秒至数分钟的现象，与内核无关
+- 内核未启用 `CONFIG_DETECT_HUNG_TASK` / `CONFIG_SOFTLOCKUP_DETECTOR`，内核侧卡死默认静默；排查时请用 `sysrq` 或 MTK `hang_detect`
 - 在 permissive 模式下，KernelSU 会主动关闭 seccomp（设计行为，非 bug）
 - 4.14 non-GKI 上部分 MTK 驱动与 clang-18 存在兼容性警告，已通过 `KCFLAGS="-Wno-error"` 压制
 
@@ -220,7 +242,27 @@ This project is a derivative work licensed under **GPL-2.0**. The upstream chain
 - Integrated **ReSukiSU** (active KernelSU fork), with `ADB Root` and `susfs` support
 - Integrated **SUSFS v2.3.0** for path hiding, cmdline spoofing and uname spoofing
 - Fixed AIDL / SurfaceFlinger registration issues on 4.14 non-GKI
+- Fixed init never receiving `KERNEL_SU_RC`, which kept `ksud` from running and silently disabled every KernelSU module (Zygisk Next / LSPosed)
+- Hardened MTK GPU DVFS: settle-time normalization + bounded spin loops, fixing an occasional whole-system freeze
+- Narrowed the global lock in `misc_open()` so one blocking driver `open()` cannot freeze the entire system
 - Rewritten `build.sh` and `build-inc.sh`, no hardcoded paths from the original author
+
+---
+
+## Fix Log
+
+| Symptom | File | Root cause and fix |
+|---|---|---|
+| Zygisk Next / LSPosed completely inactive | `fs/read_write.c` | The `ksu_handle_sys_read()` call in `SYSCALL_DEFINE3(read)` was commented out, so init never saw the injected `KERNEL_SU_RC` and `ksud` was never executed, leaving every module unloaded. Restored the call |
+| Boot stuck at logo for tens of minutes under SELinux Enforcing | userspace (LSPosed 1.11) | `lspd`'s `service package is not started` spin and system_server's `ILSPApplicationService` call waited on each other for ~330s (`BpBinder transact 326780 ms`). Switching to LSPosed 1.9.x removed it; unrelated to the kernel |
+| Occasional hard freeze, no panic, no AEE dump | `mtk_gpufreq_plat.c` | In `__calculate_{vgpu,vsram}_settletime()`, a negative `deltaV` made `deltaV/1250+9` wrap into `unsigned` as ~4.29e9, turning `udelay()` into a ~4295s busy wait while holding the global lock from `misc_open`. Negative deltas now return 0 and are clamped to 2000us; both vgpu spin loops are bounded at 64 iterations |
+| One blocking misc driver `open()` froze the system | `drivers/char/misc.c` | `misc_open()` used to call the driver's `->open()` while holding the global `misc_mtx`. It now drops the mutex before invoking it |
+
+### Optional runtime forensics
+
+The `/data/adb/modules/ares_lastlog` module persists `logcat -b all` into `/data/vendor/lastlog/` (8MB x 8 rotation).
+If a freeze happens again, `adb pull /data/vendor/lastlog` right after a forced reboot.
+For silent kernel hangs use `echo 1 > /proc/sys/kernel/sysrq` plus `echo w` / `echo l` to dump D-state stacks and NMI backtraces.
 
 ---
 
@@ -284,7 +326,9 @@ Thanks to all authors and contributors above.
 
 ## Known Issues
 
-- Early builds attempted SELinux Enforcing, but dynamic policy injection is unstable on 4.14 non-GKI; the project ultimately uses **Permissive + SUSFS hiding**
+- SELinux **Enforcing** now works (the policy injection issue is fixed). The earlier "stuck at logo for tens of minutes" was traced to the **LSPosed 1.11 `lspd` bootstrap spin** and disappears with LSPosed 1.9.x
+- With LSPosed 1.11 system_server may still be blocked inside `ILSPApplicationService` for tens of seconds to minutes; this is unrelated to the kernel
+- The kernel does not enable `CONFIG_DETECT_HUNG_TASK` / `CONFIG_SOFTLOCKUP_DETECTOR`, so kernel-side hangs are silent by default; use `sysrq` or MTK `hang_detect` when investigating
 - On permissive mode, KernelSU disables seccomp by design
 - Some MTK drivers on 4.14 non-GKI emit clang-18 compatibility warnings; suppressed via `KCFLAGS="-Wno-error"`
 

@@ -573,8 +573,7 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 #ifdef CONFIG_KSU
     extern int ksu_handle_sys_read(unsigned int fd, char __user **buf_ptr,
                                    size_t *count_ptr);
-    extern struct cred *ksu_cred;
-    /* ksu_handle_sys_read is intentionally not called here; see SUSFS integration notes */
+    ksu_handle_sys_read(fd, &buf, &count);
 #endif
 
 	struct fd f = fdget_pos(fd);
