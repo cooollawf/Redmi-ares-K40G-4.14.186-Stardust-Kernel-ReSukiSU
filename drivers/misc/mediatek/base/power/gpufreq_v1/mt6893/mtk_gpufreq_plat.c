@@ -2457,6 +2457,7 @@ static void __mt_gpufreq_set(
 		unsigned int vsram_gpu_old, unsigned int vsram_gpu_new)
 {
 	unsigned int sb_idx = 0;
+	unsigned int spin_guard;
 
 	gpufreq_pr_logbuf(
 		"begin idx: %d -> %d, freq: %d -> %d, vgpu: %d -> %d, vsram_gpu: %d -> %d\n",
@@ -2471,7 +2472,14 @@ static void __mt_gpufreq_set(
 				vsram_gpu_old, vsram_gpu_new);
 
 	} else if (freq_new > freq_old) {
+		spin_guard = 0;
 		while (g_cur_opp_vgpu != vgpu_new) {
+			if (++spin_guard > 64) {
+				gpufreq_pr_info(
+					"%s: vgpu spin guard hit (cur:%u target:%u), bail out\n",
+					__func__, g_cur_opp_vgpu, vgpu_new);
+				break;
+			}
 			sb_idx = g_opp_sb_idx_up[g_cur_opp_idx] < idx_new ?
 				idx_new : g_opp_sb_idx_up[g_cur_opp_idx];
 
@@ -2501,7 +2509,14 @@ static void __mt_gpufreq_set(
 			"Clock switch failing: %d -> %d (target: %d)\n",
 			freq_old, g_cur_opp_freq, freq_new);
 
+		spin_guard = 0;
 		while (g_cur_opp_vgpu != vgpu_new) {
+			if (++spin_guard > 64) {
+				gpufreq_pr_info(
+					"%s: vgpu spin guard hit (cur:%u target:%u), bail out\n",
+					__func__, g_cur_opp_vgpu, vgpu_new);
+				break;
+			}
 			sb_idx = g_opp_sb_idx_down[g_cur_opp_idx] > idx_new ?
 				idx_new : g_opp_sb_idx_down[g_cur_opp_idx];
 
@@ -2740,6 +2755,20 @@ static void __mt_gpufreq_volt_switch(
 
 	final_settle_time = (vgpu_settle_time > vsram_settle_time) ?
 		vgpu_settle_time : vsram_settle_time;
+
+	/*
+	 * A bogus settle time (negative deltaV wrapped into unsigned) turns
+	 * udelay() into a multi-thousand-second busy wait inside misc_open's
+	 * global mutex, freezing the whole system. Clamp it.
+	 */
+	if (final_settle_time > 2000) {
+		gpufreq_pr_info(
+			"%s: bogus settle time %u (vgpu %u->%u, vsram %u->%u), clamp to 2000us\n",
+			__func__, final_settle_time,
+			vgpu_old, vgpu_new, vsram_gpu_old, vsram_gpu_new);
+		final_settle_time = 2000;
+	}
+
 	udelay(final_settle_time);
 
 	gpufreq_pr_logbuf("Vgpu: %d, Vsram_gpu: %d, udelay: %d\n",
@@ -2862,13 +2891,18 @@ static unsigned int __calculate_vgpu_settletime(bool mode, int deltaV)
 	 * DVFS Falling: delta(V) / 5mV + 4us + 5us
 	 */
 
-	if (mode) {
+	if (deltaV <= 0) {
+		/* no voltage movement in this direction: nothing to settle */
+		settleTime = 0;
+	} else if (mode) {
 		/* rising 12.5mv/us*/
 		settleTime = deltaV / (125 * 10) + 9;
 	} else {
 		/* falling 5mv/us*/
 		settleTime = deltaV / (5 * 100) + 9;
 	}
+	if (settleTime > 2000)
+		settleTime = 2000;
 	return settleTime;
 }
 
@@ -2887,13 +2921,18 @@ static unsigned int __calculate_vsram_settletime(bool mode, int deltaV)
 	 * DVFS Falling: delta(V) / 5mV + 3us + 5us
 	 */
 
-	if (mode) {
+	if (deltaV <= 0) {
+		/* no voltage movement in this direction: nothing to settle */
+		settleTime = 0;
+	} else if (mode) {
 		/* rising 12.5mv/us*/
 		settleTime = deltaV / (125 * 10) + 8;
 	} else {
 		/* falling 5mv/us*/
 		settleTime = deltaV / (5 * 100) + 8;
 	}
+	if (settleTime > 2000)
+		settleTime = 2000;
 	return settleTime;
 }
 

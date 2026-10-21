@@ -150,8 +150,19 @@ static int misc_open(struct inode *inode, struct file *file)
 
 	err = 0;
 	replace_fops(file, new_fops);
+
+	/*
+	 * Do not hold the global misc mutex across the driver's ->open():
+	 * one driver that sleeps in open() would otherwise block every
+	 * other misc device open on the whole system (seen with the Mali
+	 * kbase open path taking the GPU DVFS locks).
+	 */
+	mutex_unlock(&misc_mtx);
+
 	if (file->f_op->open)
 		err = file->f_op->open(inode, file);
+
+	return err;
 fail:
 	mutex_unlock(&misc_mtx);
 	return err;
