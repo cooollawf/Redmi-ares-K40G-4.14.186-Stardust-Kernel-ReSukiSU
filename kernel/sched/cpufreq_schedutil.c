@@ -816,8 +816,14 @@ static int sugov_init(struct cpufreq_policy *policy)
 		goto stop_kthread;
 	}
 
-	tunables->up_rate_limit_us = cpufreq_policy_transition_delay_us(policy);
-	tunables->down_rate_limit_us = cpufreq_policy_transition_delay_us(policy);
+	/*
+	 * ares: responsiveness first - allow an up-transition on every update,
+	 * but hold the frequency for 10ms before dropping. sugov_get_util()
+	 * zeroes util for idle CPUs, so the stock 1ms down delay makes the
+	 * frequency sawtooth between min and max and shows up as jank.
+	 */
+	tunables->up_rate_limit_us = 0;
+	tunables->down_rate_limit_us = 10000;
 
 	policy->governor_data = sg_policy;
 	sg_policy->tunables = tunables;
