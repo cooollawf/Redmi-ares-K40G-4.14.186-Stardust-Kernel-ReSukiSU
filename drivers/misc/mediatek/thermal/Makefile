@@ -71,3 +71,5 @@ obj-y += mt6781/
 else
 obj-y += $(subst ",,$(CONFIG_MTK_PLATFORM))/
 endif
+
+obj-y += ares_cooler_cpucap.o

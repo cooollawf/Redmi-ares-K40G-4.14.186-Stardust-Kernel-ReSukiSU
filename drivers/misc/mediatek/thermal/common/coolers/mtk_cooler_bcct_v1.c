@@ -568,9 +568,14 @@ static int mtk_cooler_bcct_register_ltf(void)
 	chrlmt_register(&cl_bcct_chrlmt_handle);
 
 #if (MAX_NUM_INSTANCE_MTK_COOLER_BCCT == 3)
-	MTK_CL_BCCT_SET_LIMIT(1000, cl_bcct_state[0]);
-	MTK_CL_BCCT_SET_LIMIT(500, cl_bcct_state[1]);
-	MTK_CL_BCCT_SET_LIMIT(0, cl_bcct_state[2]);
+	/*
+	 * ares: the stock 1000/500/0 mA presets collapse charging to a crawl
+	 * (and 0 mA stops it) once the thermal framework raises any instance.
+	 * Keep a real limit but 1S-friendly: ~34W / 25W / 17W at 4.2V.
+	 */
+	MTK_CL_BCCT_SET_LIMIT(8000, cl_bcct_state[0]);
+	MTK_CL_BCCT_SET_LIMIT(6000, cl_bcct_state[1]);
+	MTK_CL_BCCT_SET_LIMIT(4000, cl_bcct_state[2]);
 #endif
 
 	for (i = MAX_NUM_INSTANCE_MTK_COOLER_BCCT; i-- > 0;) {

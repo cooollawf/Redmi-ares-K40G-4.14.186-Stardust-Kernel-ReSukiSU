@@ -719,8 +719,14 @@ static void fbt_set_down_throttle_locked(int nsec)
 		return;
 
 	xgf_trace("fpsgo set down_throttle %d", nsec);
-	update_schedplus_down_throttle_ns(EAS_THRES_KIR_FPSGO, nsec);
-	update_schedplus_up_throttle_ns(EAS_THRES_KIR_FPSGO, nsec);
+	/*
+	 * ares: fpsgo used to push 0 us/0 us into eas_ctrl as soon as any frame
+	 * stream was alive and let it fall back to 1 ms/1 ms afterwards, which
+	 * stomped the schedutil defaults set in sugov_init() and made the
+	 * governor rate limits depend on whether an app was rendering.
+	 * Keep the bookkeeping for the sysfs node, leave the governor alone:
+	 * schedutil now runs 0 us up / 10 ms down (AOSP defaults) permanently.
+	 */
 	down_throttle_ns = nsec;
 }
 

@@ -1598,8 +1598,13 @@ int eas_ctrl_init(struct proc_dir_entry *parent)
 	perf_sched_big_task_rotation = 0;
 	perf_sched_stune_task_thresh = -1;
 
-	default_schedplus_down_throttle_ns = 1000000;
-	default_schedplus_up_throttle_ns = 1000000;
+	/*
+	 * ares: match sugov_init() (0 us up / 10 ms down). The stock 1 ms/1 ms
+	 * pair is what fpsgo pushed back into the governor on every reset and
+	 * that silently overwrote the values chosen at governor start.
+	 */
+	default_schedplus_down_throttle_ns = 10000000;
+	default_schedplus_up_throttle_ns = 0;
 	default_schedplus_sync_flag = 1;
 	cur_schedplus_down_throttle_ns = -1;
 	cur_schedplus_up_throttle_ns = -1;
